@@ -12,12 +12,14 @@
 #include <string>
 #include <vector>
 #include <math.h>
+#include <list>
 #include "CImg.h"
 #include "Sift.h"
 #include "Matrix.h"
 #include "Transform.h"
 #include <map>
-#include <list>
+#include "MappedCoordinates.h"
+#include "HomographyEstimator.h"
 
 //Use the cimg namespace to access the functions easily
 using namespace cimg_library;
@@ -190,6 +192,8 @@ int temp() {
 
 //-----------------------------------------------------------------------------------------
 
+
+
 double euclidean_distance(const SiftDescriptor &input1, const SiftDescriptor &input2)
 {
 	double distance = 0;
@@ -223,12 +227,11 @@ bool nearest_neighbour(const vector< double> &input1, const vector< double> &inp
 	return true;
 }
 
-bool compare_summary(const CImg<double> &src, const CImg<double> &target,int a, int b)
+bool compare(const CImg<double> &input1, const CImg<double> &input2,int size1, int size2)
 {
 	for (int i = 0; i < 5; i++)
 	{
-	//if (abs(src(i, a) - target(i, b)) >= tolerance)
-	if (src(i, a) != target(i, b))
+	if (input1(i, size1) != input2(i, size2))
 	{
 	return false;
 	}
@@ -239,70 +242,67 @@ bool compare_summary(const CImg<double> &src, const CImg<double> &target,int a, 
 double projection_function(const vector<SiftDescriptor> &input1, const vector<SiftDescriptor> &input2,const CImg<double> &X,vector< pair<int, int> > &pairs)
 {
 	double w = 255;
-	int K = 5;
-	int M = input1.size();
-	int N = input2.size();
-	CImg<double> src_summary_vecs(K, M);
-	for (int y = 0; y < M; y++) {
-		for (int j = 0; j < K; j++) {
+	int sub_iter = 5;
+	int input_size = input1.size();
+	int target_size = input2.size();
+	CImg<double> source_vectors(sub_iter, input_size);
+	for (int y = 0; y < input_size; y++) {
+		for (int j = 0; j < sub_iter; j++) {
 			for (int i = 0; i < 128; i++) {
-				src_summary_vecs(j, y) += X(j, i) * input1[i].descriptor[i] / w;
+				source_vectors(j, y) += X(j, i) * input1[i].descriptor[i] / w;
 			}
-			src_summary_vecs(j, y) = (int) src_summary_vecs(j, y);
+			source_vectors(j, y) = (int) source_vectors(j, y);
 		}
 	}
 
-	CImg<double> target_summary_vecs(K, N);
-	for (int y = 0; y < N; y++) {
-		for (int j = 0; j < K; j++) {
+	CImg<double> target_vectors(sub_iter, target_size);
+	for (int y = 0; y < target_size; y++) {
+		for (int j = 0; j < sub_iter; j++) {
 			for (int i = 0; i < 128; i++) {
-				target_summary_vecs(j, y) += X(j, i) * input2[i].descriptor[i] / w;
+				target_vectors(j, y) += X(j, i) * input2[i].descriptor[i] / w;
 			}
-			target_summary_vecs(j, y) = (int) target_summary_vecs(j, y);
+			target_vectors(j, y) = (int) target_vectors(j, y);
 		}
 	}
 
 	double dist = 0.0;
-	int min_index = -1, second_index;
+	int min_index = -1, second_min_index;
 
 	std::map<int, pair<int, double> > match_map;
 
-	for (int i = 0; i < M; i++) {
-		double min_dist = std::numeric_limits<double>::infinity(), second_dist;
+	for (int i = 0; i < input_size; i++) {
+		double min_dist = std::numeric_limits<double>::infinity(), second_min_dist;
 		int j;
-		for (j = 0; j < N; j++) {
-			if (compare_summary(src_summary_vecs, target_summary_vecs, i, j)) {
+		for (j = 0; j < target_size; j++) {
+			if (compare(source_vectors, target_vectors, i, j)) {
 				double diff = euclidean_distance(input1[i], input2[j]);
-				printf("%d<>%d:%f\n", i, j, diff);
 				if (min_dist > diff) {
-					second_dist = min_dist;
-					second_index = min_index;
+					second_min_dist = min_dist;
+					second_min_index = min_index;
 					min_dist = diff;
 					min_index = j;
-				} else if (second_dist > diff) {
-					second_dist = diff;
-					second_index = j;
+				} else if (second_min_dist > diff) {
+					second_min_dist = diff;
+					second_min_index = j;
 				}
 			}
 		}
 		if (min_dist == std::numeric_limits<double>::infinity()) {
-			for (j = 0; j < N; j++) {
+			for (j = 0; j < target_size; j++) {
 				double diff = euclidean_distance(input1[i], input2[j]);
 				if (min_dist > diff) {
-					second_dist = min_dist;
-					second_index = min_index;
+					second_min_dist = min_dist;
+					second_min_index = min_index;
 					min_dist = diff;
 					min_index = j;
-				} else if (second_dist > diff) {
-					second_dist = diff;
-					second_index = j;
+				} else if (second_min_dist > diff) {
+					second_min_dist = diff;
+					second_min_index = j;
 				}
 			}
 		}
-		printf("dist: %f, dist2: %f\n", min_dist, second_dist);
 		dist += min_dist;
-		//if (min_dist < 260 && second_dist - min_dist > 100)
-		if (second_dist - min_dist > 100) {
+		if (second_min_dist - min_dist > 100) {
 			map<int, pair<int, double> >::iterator pos = match_map.find(
 					min_index);
 			if (pos == match_map.end()) {
@@ -310,8 +310,6 @@ double projection_function(const vector<SiftDescriptor> &input1, const vector<Si
 			} else if (pos->second.second > min_dist) {
 				match_map[min_index] = pair<int, double>(i, min_dist);
 			}
-
-			//pairs.push_back(pair<int, int>(i, min_index));
 		}
 
 	}
@@ -320,208 +318,43 @@ double projection_function(const vector<SiftDescriptor> &input1, const vector<Si
 		pairs.push_back(pair<int, int>(it->second.first, it->first));
 	}
 
-	for (int i = 0; i < pairs.size(); i++) {
-		printf("%d -->> %d\n", pairs[i].first, pairs[i].second);
-	}
-
 	return dist;
 }
 
-void mark_descriptors(CImg<double> &input_image, const vector<SiftDescriptor> & descriptors, int color)
+void duplicate(CImg<double> &target, const CImg<double> &source)
 {
-	for(int i=0; i<descriptors.size(); i++)
+	for (int i = 0; i < source.height(); i++)
 	{
-	cout << "descriptor #" << i << ": x=" << descriptors[i].col << " y=" << descriptors[i].row << " descriptor=(";
-	for(int l=0; l<128; l++)
-	cout << descriptors[i].descriptor[l] << "," ;
-	cout << ")" << endl;
-
-	for(int j=0; j<5; j++)
-	for(int k=0; k<5; k++)
-	if(j==2 || k==2)
+	for (int j = 0; j < source.width(); j++)
 	{
-	int x_d = descriptors[i].col+k;
-	int y_d = descriptors[i].row+j;
-	x_d = min(x_d, input_image.width() - 1);
-	y_d = min(y_d, input_image.height() - 1);
-	input_image(x_d, y_d, 0, 0)=0;
-	input_image(x_d, y_d, 0, 1)=0;
-	input_image(x_d, y_d, 0, 2)=0;
+	target(j, i, 0, 0) = source(j, i, 0, 0);
+	target(j, i, 0, 1) = source(j, i, 0, 1);
+	target(j, i, 0, 2) = source(j, i, 0, 2);
 	}
-
 	}
 }
 
-void copying(CImg<double> &target, const CImg<double> &src)
+CImg<double> image_join(const CImg<double> &input1, const CImg<double> &input2)
 {
-	for (int i = 0; i < src.height(); i++)
-	{
-	for (int j = 0; j < src.width(); j++)
-	{
-	target(j, i, 0, 0) = src(j, i, 0, 0);
-	target(j, i, 0, 1) = src(j, i, 0, 1);
-	target(j, i, 0, 2) = src(j, i, 0, 2);
-	}
-	}
+	int coloumns = input1.width() + input2.width();
+	int rows = max(input1.height(), input2.height());
+
+	CImg<double> new_image(coloumns, rows, 1, 3);
+	new_image = 0.0;
+
+	duplicate(new_image, input2);
+	new_image.shift(input1.width());
+	duplicate(new_image, input1);
+
+	return new_image;
 }
-
-CImg<double> stack_image(const CImg<double> &img1, const CImg<double> &img2)
-{
-	int cols = img1.width() + img2.width();
-	int rows = max(img1.height(), img2.height());
-
-	CImg<double> newimg(cols, rows, 1, 3);
-	newimg = 0.0;
-
-	copying(newimg, img2);
-	newimg.shift(img1.width());
-	copying(newimg, img1);
-
-	return newimg;
-}
-
-CImg<double> compute_ransac(const std::vector<MappedCoordinates>& input) {
-	int i, j, k, select_index;
-	int inliners = 0;
-	int max_inliners = 0;
-	int max_inliners_index = 0;
-	int limit = 4;
-
-	double min_norm = std::numeric_limits<double>::infinity();
-
-	CImg<double> A(8, 8, 1, 1);
-	CImg<double> B(1, 8, 1, 1);
-
-	CImg<double> transformation_matrix(3, 3, 1, 1);
-	CImg<double> best_transformation_matrix(3, 3, 1, 1);
-	CImg<double> new_coordinates(1, 3, 1, 1);
-	CImg<double> old_coordinates(1, 3, 1, 1);
-
-	double x_original;
-	double y_original;
-	double x_transformed;
-	double y_transformed;
-	int iterations = 0;
-	cout << "IN RANSAC \n";
-	while (iterations < 100) {
-		static unsigned total_tries = 0;
-		total_tries++;
-		if (total_tries >= 3000000) {
-			cout << "failed to find proper correspondances.\n";
-			exit(1);
-		}
-		for (j = 0; j < 8; j++) {
-			if (j % 2 == 0) {
-				select_index = ((double) rand()) / RAND_MAX * input.size();
-				MappedCoordinates mp = input[j];
-				x_original = mp.x1;
-				y_original = mp.y1;
-				x_transformed = mp.x2;
-				y_transformed = mp.y2;
-
-				A(0, j) = x_original;
-				A(1, j) = y_original;
-				A(2, j) = 1;
-				A(3, j) = 0;
-				A(4, j) = 0;
-				A(5, j) = 0;
-				A(6, j) = -(x_original * x_transformed);
-				A(7, j) = -(y_original * x_transformed);
-
-				B(0, j) = x_transformed;
-			} else {
-				A(0, j) = 0;
-				A(1, j) = 0;
-				A(2, j) = 0;
-				A(3, j) = x_original;
-				A(4, j) = y_original;
-				A(5, j) = 1;
-				A(6, j) = -(x_original * y_transformed);
-				A(7, j) = -(y_original * y_transformed);
-
-				B(0, j) = y_transformed;
-			}
-		}
-		CImg<double> X = B.solve(A);
-		k = 0;
-		for (i = 0; i < 3; i++) {
-			for (j = 0; j < 3; j++) {
-				transformation_matrix(j, i) = X(0, k);
-				k++;
-			}
-		}
-		transformation_matrix(2, 2) = 1;
-
-		old_coordinates(0, 2) = 1;
-		inliners = 0;
-
-		double normx;
-		if (transformation_matrix.magnitude(2) > 500) {
-			continue;
-		}
-		CImg<double> tmp = transformation_matrix;
-		tmp.invert(1);
-		if (tmp.magnitude(2) > 500) {
-			continue;
-		}
-		normx = max(transformation_matrix.magnitude(2), tmp.magnitude(2));
-
-		for (i = 0; i < input.size(); i++) {
-			MappedCoordinates mp = input[j];
-			old_coordinates(0, 0) = mp.x1;
-			old_coordinates(0, 1) = mp.y1;
-
-			new_coordinates = transformation_matrix * old_coordinates;
-
-			if ((new_coordinates(0, 0) >= (mp.x2 - limit)
-					&& new_coordinates(0, 0) <= (mp.x2 + limit))
-					&& (new_coordinates(0, 1) >= (mp.y2 - limit)
-							&& new_coordinates(0, 1) <= (mp.y2 + limit))) {
-				inliners++;
-			}
-		}
-		if (inliners < 4) {
-			continue;
-		} else {
-			cout << "in layers: " << inliners << endl;
-		}
-
-		if (max_inliners < inliners) {
-			max_inliners = inliners;
-			max_inliners_index = select_index;
-			cout << "norm = " << normx << endl;
-			for (i = 0; i < 3; i++) {
-				for (j = 0; j < 3; j++) {
-					best_transformation_matrix(j, i) = transformation_matrix(j,
-							i);
-
-				}
-			}
-		}
-		iterations++;
-
-		total_tries = 0;
-	}
-	cout << "MAX=" << max_inliners_index << "\n";
-	for (i = 0; i < 3; i++) {
-		for (j = 0; j < 3; j++) {
-			cout << best_transformation_matrix(j, i) << " ";
-
-		}
-		cout << "\n";
-	}
-
-	cout << best_transformation_matrix.magnitude(1) << endl;
-	return best_transformation_matrix;
-}
-
 
 //----------------------------------------------------------------------------------------
 
 
 int main(int argc, char **argv)
 {
-	return temp();
+	//return temp();
 	try {
 		if(argc < 2)
 		{
@@ -533,150 +366,82 @@ int main(int argc, char **argv)
 		string part = argv[1];
 
 		// Sift detector
-		if(part == "part1.1")
+		if(part == "part1")
 		{
-			if(argc < 4)
+			string inputFile = argv[2];
+			CImg<double> input_image(inputFile.c_str());
+			CImg<double> gray = input_image.get_RGBtoHSI().get_channel(2);
+			vector<SiftDescriptor> descriptors = Sift::compute_sift(gray);
+
+			list< pair<double, int> > ordered;
+
+			vector< CImg<double> > final_targets;
+			vector< vector< SiftDescriptor > > records;
+			vector< vector< pair< int, int > > > pair_of_pics;
+			const int first_i_target = 2;
+			for (int file = first_i_target; file < argc; file ++)
 			{
-				cout << "Insufficent number of arguments." << endl;
-				return -1;
+			final_targets.push_back(CImg<double>(argv[file]));
+			CImg<double> &image_target = final_targets.back();
+			CImg<double> gray = image_target.get_RGBtoHSI().get_channel(2);
+			vector<SiftDescriptor> target_descriptors = Sift::compute_sift(gray);
+			records.push_back(target_descriptors);
+
+			pair_of_pics.push_back(vector< pair<int, int> >());
+			vector< pair<int, int> > &vector_pairs = pair_of_pics.back();
+			CImg<double> X = compute_X();
+			double distance = projection_function(descriptors, target_descriptors, X, vector_pairs);
+
+			list< pair<double, int> >::iterator final_list;
+			for (final_list = ordered.begin(); final_list != ordered.end(); final_list++)
+			{
+			if (final_list->first >= distance)
+			{
+			break;
+			}
 			}
 
-			CImg<double> input1(argv[2]);
-			CImg<double> input2(argv[3]);
-
-			double matches = sift_matching(input1, input2, part);
-			cout<<"The Number of Sift Matches: "<<matches<<endl;
-		}
-		else if(part == "part1.2")
-		{
-			if(argc < 4)
-			{
-				cout << "Insufficent number of arguments." << endl;
-				return -1;
+			ordered.insert(final_list, pair<double, int>(distance, file - first_i_target));
 			}
 
-			CImg<double> input(argv[2]);
-
-			// creating a vector to store the sift matches for each of the image
-			vector<Image> images;
-
-			// take in all the images from the cammand line and calculate sift matches of the descriptors
-			for(int i=3; i<argc; i++)
-			{
-				CImg<double> img(argv[i]);
-				Image I;
-				I.setParameters(argv[i], sift_matching(input, img, part));
-				images.push_back(I);
-			}
-
-			// sort according to the sift match count
-			std::sort(images.begin(), images.end());
-
-			// printing the results
-			cout<<"Top matches for Input Image: "<<argv[2]<<endl<<"Image Name: \t\t"<<"Count: "<<endl;
-			for(int i = 0; i < images.size(); i++)
-			{
-				cout<<images[i].getName()<<"\t\t  "<<images[i].getCount()<<endl;
-			}
-
-		}
-
-		else if (part == "part1.4") {
-
-				string inputFile = argv[2];
-				CImg<double> input_image(inputFile.c_str());
-
-				CImg<double> gray = input_image.get_RGBtoHSI().get_channel(2);
-				vector<SiftDescriptor> descriptors = Sift::compute_sift(gray);
-
-				list< pair<double, int> > ordered; // ( (dist, index), ... )
-
-				vector< CImg<double> > targets;
-				vector< vector< SiftDescriptor > > desc_records;
-				vector< vector< pair< int, int > > > all_pic_pairs;
-				const int first_target_i = 2;
-				for (int nfile = first_target_i; nfile < argc; nfile ++)
+			for (list<pair<double, int> >::iterator it = ordered.begin();
+				it != ordered.end(); it++)
 				{
-				targets.push_back(CImg<double>(argv[nfile]));
-				CImg<double> &target_image = targets.back();
-
-				// convert image to grayscale
-				CImg<double> gray = target_image.get_RGBtoHSI().get_channel(2);
-				vector<SiftDescriptor> target_descriptors = Sift::compute_sift(gray);
-				desc_records.push_back(target_descriptors);
-
-				mark_descriptors(target_image, target_descriptors, 0);
-
-				all_pic_pairs.push_back(vector< pair<int, int> >());
-				vector< pair<int, int> > &pairs = all_pic_pairs.back();
-				CImg<double> X = compute_X();
-				double distance = projection_function(descriptors, target_descriptors, X, pairs);
-
-				list< pair<double, int> >::iterator lsit;
-				for (lsit = ordered.begin(); lsit != ordered.end(); lsit++)
+				int ind = it->second;
+				CImg<double> &target_image = final_targets[ind];
+				vector< pair<int, int> > &pairs = pair_of_pics[ind];
+				gray = target_image.get_RGBtoHSI().get_channel(2);
+				vector<SiftDescriptor> &target_descriptors = records[ind];
+				CImg<double> pair_image = image_join(input_image, target_image);
+				const unsigned char color[] = { 0,255,0 };
+				for (int i = 0; i < pairs.size(); i++)
 				{
-				if (lsit->first >= distance)
-				{
-				break;
-				}
-				}
-				printf("argv[%d] : %f\n", nfile, distance);
-
-				//target_image()
-
-				ordered.insert(lsit, pair<double, int>(distance, nfile - first_target_i));
+				int x1 = descriptors[pairs[i].first].col;
+				int y1 = descriptors[pairs[i].first].row;
+				int x2 = target_descriptors[pairs[i].second].col;
+				int y2 = target_descriptors[pairs[i].second].row;
+				x2 += input_image.width();
+				pair_image.draw_line(x1, y1, x2, y2, color);
 				}
 
-				for (list<pair<double, int> >::iterator it = ordered.begin();
-					it != ordered.end(); it++)
-					{
-					int ind = it->second;
-					printf("%s\n", argv[ind + first_target_i]);
+				CImgDisplay diaplay_pair(pair_image, "Joined");
+				while (!diaplay_pair.is_closed())
+				{
+					diaplay_pair.wait();
+				}
 
-					CImg<double> &target_image = targets[ind];
-
-					vector< pair<int, int> > &pairs = all_pic_pairs[ind];
-
-					gray = target_image.get_RGBtoHSI().get_channel(2);
-					//vector<SiftDescriptor> target_descriptors = Sift::compute_sift(gray);
-					vector<SiftDescriptor> &target_descriptors = desc_records[ind];
-
-					//double distance = sift_matching_with_random_vecotr(descriptors, target_descriptors, rand_mat, pairs);
-
-					CImg<double> paired = stack_image(input_image, target_image);
-
-					const unsigned char color[] = { 255,128,64 };
-					for (int i = 0; i < pairs.size(); i++)
-					{
-					int x1 = descriptors[pairs[i].first].col;
-					int y1 = descriptors[pairs[i].first].row;
-					int x2 = target_descriptors[pairs[i].second].col;
-					int y2 = target_descriptors[pairs[i].second].row;
-					//printf("%d %d, %d %d\n", x1, y1, x2, y2);
-					x2 += input_image.width();
-					paired.draw_line(x1, y1, x2, y2, color);
-					}
-
-					CImgDisplay pair_disp(paired, "PAIRED");
-					while (!pair_disp.is_closed())
-					{
-					pair_disp.wait();
-					}
-
-					paired.save("paired.png");
-					}
-
+				pair_image.save("joined.png");
+				}
 		}
 		else if(part == "part2")
 		{
-			// do something here!
+
 
 		}
 		else
+		{
 			throw std::string("unknown part!");
-
-		// feel free to add more conditions for other parts (e.g. more specific)
-		//  parts, for debugging, etc.
+		}
 	}
 	catch(const string &err) {
 		cerr << "Error: " << err << endl;
